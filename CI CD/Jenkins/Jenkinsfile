@@ -1,0 +1,54 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'python -m py_compile sample-app/app.py'
+                sh 'docker build -t ci-cd-sample ./sample-app'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Run unit tests here'
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                echo 'Run Trivy/Snyk here'
+            }
+        }
+
+        stage('Deploy Dev') {
+            steps {
+                echo 'Deploying to development'
+            }
+        }
+
+        stage('Deploy Staging') {
+            steps {
+                echo 'Deploying to staging'
+            }
+        }
+
+        stage('Deploy Prod') {
+            steps {
+                echo 'Deploying to production'
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline completed'
+        }
+    }
+}

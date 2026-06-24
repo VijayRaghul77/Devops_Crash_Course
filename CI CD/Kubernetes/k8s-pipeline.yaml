@@ -1,0 +1,21 @@
+name: Kubernetes Deployment Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build Docker image
+      run: docker build -t ci-cd-sample ./sample-app
+    - name: Validate Kubernetes manifests
+      run: |
+        echo "Run kubectl apply --dry-run=client or kubeconform here"
+    - name: Deploy to Kubernetes
+      run: |
+        echo "Apply deployment.yaml and service.yaml here"

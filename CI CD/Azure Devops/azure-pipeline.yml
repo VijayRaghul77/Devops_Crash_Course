@@ -1,0 +1,67 @@
+trigger:
+  branches:
+    include:
+    - main
+
+pr:
+  branches:
+    include:
+    - main
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildJob
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - script: python -m py_compile sample-app/app.py
+      displayName: Syntax Check
+    - script: docker build -t ci-cd-sample ./sample-app
+      displayName: Build Docker Image
+
+- stage: Test
+  dependsOn: Build
+  jobs:
+  - job: TestJob
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - script: echo "Run unit tests here"
+      displayName: Test Step
+
+- stage: DeployDev
+  dependsOn: Test
+  jobs:
+  - deployment: DeployDevJob
+    environment: development
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "Deploying to Dev"
+            displayName: Deploy to Dev
+
+- stage: DeployStaging
+  dependsOn: DeployDev
+  jobs:
+  - deployment: DeployStagingJob
+    environment: staging
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "Deploying to Staging"
+            displayName: Deploy to Staging
+
+- stage: DeployProd
+  dependsOn: DeployStaging
+  jobs:
+  - deployment: DeployProdJob
+    environment: production
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "Deploying to Production"
+            displayName: Deploy to Production

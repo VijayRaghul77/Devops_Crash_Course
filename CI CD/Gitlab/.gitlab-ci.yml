@@ -1,0 +1,42 @@
+stages:
+- build
+- test
+- security
+- deploy
+
+variables:
+  IMAGE_NAME: ci-cd-sample
+
+build_job:
+  stage: build
+  script:
+  - python -m py_compile sample-app/app.py
+  - docker build -t $IMAGE_NAME ./sample-app
+
+unit_test_job:
+  stage: test
+  script:
+  - echo "Running unit tests"
+
+security_job:
+  stage: security
+  script:
+  - echo "Run Trivy/Snyk scan here"
+
+deploy_dev:
+  stage: deploy
+  script:
+  - echo "Deploying to development"
+  environment: development
+
+deploy_staging:
+  stage: deploy
+  script:
+  - echo "Deploying to staging"
+  environment: staging
+
+deploy_prod:
+  stage: deploy
+  script:
+  - echo "Deploying to production"
+  environment: production

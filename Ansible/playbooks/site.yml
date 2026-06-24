@@ -1,0 +1,6 @@
+---
+- name: Configure localhost with Ansible
+  hosts: localhost
+  become: true
+  roles:
+  - common

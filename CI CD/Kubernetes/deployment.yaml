@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-cd-sample
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ci-cd-sample
+  template:
+    metadata:
+      labels:
+        app: ci-cd-sample
+    spec:
+      containers:
+      - name: ci-cd-sample
+        image: ci-cd-sample:latest
+        ports:
+        - containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15

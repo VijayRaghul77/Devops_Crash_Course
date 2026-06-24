@@ -1,0 +1,12 @@
+---
+- name: Ensure curl is installed
+  ansible.builtin.package:
+    name: curl
+    state: present
+
+- name: Create a welcome file
+  ansible.builtin.copy:
+    dest: /tmp/ansible_welcome.txt
+    content: |
+      Hello from Ansible
+    mode: '0644'
