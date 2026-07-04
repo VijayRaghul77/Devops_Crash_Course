@@ -23,8 +23,11 @@ This repository is designed for interview preparation and hands-on DevOps learni
 Start with the CI/CD section in [CI CD](CI%20CD) and then review the enterprise guide in [CI CD/Enterprise-Production-Grade-CICD-Guide.md](CI%20CD/Enterprise-Production-Grade-CICD-Guide.md).
 
 ## How to use this repo
-1. Read the CI/CD overview and enterprise guide.
-2. Run the sample app and pipeline examples locally.
-3. Practice answering enterprise-level questions using the playbook.
-4. Repeat with Kubernetes and Terraform examples once comfortable.
-5. Use the checklist to rehearse before interviews.
+1. Start with the crash course guide in [DEVOPS_CRASH_COURSE.md](DEVOPS_CRASH_COURSE.md).
+2. Use [DEVOPS_INTERVIEW_QUESTIONS.md](DEVOPS_INTERVIEW_QUESTIONS.md) for interview-focused topic practice.
+3. Follow [DEVOPS_PROJECT_ROADMAP.md](DEVOPS_PROJECT_ROADMAP.md) to build an end-to-end production-style project.
+4. Read the CI/CD overview and enterprise guide.
+5. Run the sample app and pipeline examples locally.
+6. Practice answering enterprise-level questions using the playbook.
+7. Repeat with Kubernetes and Terraform examples once comfortable.
+8. Use the checklist to rehearse before interviews.
