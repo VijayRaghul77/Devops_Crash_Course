@@ -104,8 +104,8 @@ export ARM_SUBSCRIPTION_ID="<subscription-id>"
   ```hcl
   provider "azurerm" {
     features {}
-    subscription_id = "aa2cd9ce-8c46-463c-91db-74bf555e2097"
-    tenant_id       = "955ca1aa-6ef6-4a8f-b03c-8a34e73b8c73"
+    subscription_id = "<YOUR_SUBSCRIPTION_ID>"
+    tenant_id       = "<YOUR_TENANT_ID>"
   }
   ```
 
