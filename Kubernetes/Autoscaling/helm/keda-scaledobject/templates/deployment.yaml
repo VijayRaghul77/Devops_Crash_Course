@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keda-scaledobject.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "keda-scaledobject.labels" . | nindent 4 }}
+spec:
+  # KEDA takes ownership of `replicas` once the ScaledObject targets this
+  # Deployment - it patches this field directly, so no `replicas:` key here.
+  selector:
+    matchLabels:
+      {{- include "keda-scaledobject.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keda-scaledobject.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ include "keda-scaledobject.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            {{- if .Values.secretEnv.create }}
+            - name: {{ .Values.secretEnv.envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "keda-scaledobject.fullname" . }}-conn
+                  key: connectionString
+            {{- end }}
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}

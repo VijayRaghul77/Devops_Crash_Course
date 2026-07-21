@@ -1,0 +1,41 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "keda-scaledobject.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "keda-scaledobject.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "keda-scaledobject.fullname" . }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  {{- if .Values.keda.fallback.enabled }}
+  fallback:
+    failureThreshold: {{ .Values.keda.fallback.failureThreshold }}
+    replicas: {{ .Values.keda.fallback.replicas }}
+  {{- end }}
+  triggers:
+    # --- HPA-style / external metric triggers ---
+    {{- range .Values.keda.metricTriggers }}
+    - type: {{ .type }}
+      {{- if $.Values.keda.triggerAuthentication.enabled }}
+      authenticationRef:
+        name: {{ include "keda-scaledobject.fullname" $ }}-auth
+      {{- end }}
+      metadata:
+        {{- toYaml .metadata | nindent 8 }}
+    {{- end }}
+    # --- Time-based (cron) triggers ---
+    {{- range .Values.keda.cronTriggers }}
+    - type: cron
+      metadata:
+        timezone: {{ .timezone }}
+        start: {{ .start | quote }}
+        end: {{ .end | quote }}
+        desiredReplicas: {{ .desiredReplicas | quote }}
+    {{- end }}
+{{- end }}

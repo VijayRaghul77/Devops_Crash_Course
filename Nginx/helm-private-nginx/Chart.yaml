@@ -1,0 +1,14 @@
+apiVersion: v2
+name: private-nginx
+description: >
+  Nginx deployment for a completely private (network-isolated) environment.
+  No Ingress, no NodePort/LoadBalancer — ClusterIP only, locked down with a
+  deny-all-by-default NetworkPolicy and a hardened pod security context.
+type: application
+version: 0.1.0
+appVersion: "1.27"
+keywords:
+  - nginx
+  - private
+  - network-policy
+  - hardened

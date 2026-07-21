@@ -1,0 +1,119 @@
+---
+clusterName: "opensearch-cluster"
+nodeGroup: "data"
+protocol: http
+
+roles:
+  - data
+
+replicas: 2
+
+opensearchJavaOpts: "-Xmx12g -Xms12g"
+
+resources:
+  limits:
+    cpu: '4'
+    memory: 29Gi
+  requests:
+    cpu: '1'
+    memory: 24Gi
+
+persistence:
+  enabled: true
+  storageClass: "managed-standard-ssd"
+  size: 500Gi
+  accessModes:
+    - ReadWriteOnce
+
+nodeSelector:
+  agentpool: esdata
+
+antiAffinityTopologyKey: "kubernetes.io/hostname"
+antiAffinity: "hard"
+
+image:
+  repository: "botml.azurecr.io/opensearchproject/opensearch"
+  tag: "3.5.0"
+
+config:
+  opensearch.yml: |
+    cluster.name: opensearch-cluster
+    network.host: 0.0.0.0
+    plugins.security.disabled: true
+    plugins.security.ssl.transport.enabled: false
+    plugins.security.ssl.http.enabled: false
+
+    # Performance Tuning
+    indices.memory.index_buffer_size: 20%  # Boost write performance
+    indices.queries.cache.size: 10%        # Dedicate heap for search cache
+    indices.fielddata.cache.size: 20%      # Limit expensive field data
+    indices.breaker.total.limit: 90%       # Prevent OOM
+
+    # Recovery settings
+    cluster.routing.allocation.node_initial_primaries_recoveries: 4
+    cluster.routing.allocation.node_concurrent_recoveries: 4
+
+extraEnvs:
+  - name: discovery.seed_hosts
+    value: "opensearch-cluster-master-headless"
+  - name: JAVA_TOOL_OPTIONS
+    value: "-XX:HeapDumpPath=/dev/null"
+  - name: DISABLE_SECURITY_PLUGIN
+    value: "true"
+  # NOTE: no-op while security is disabled — see master-values.yaml comment.
+  - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: alpha-secrets
+        key: opensearch-admin-secret
+
+sysctlVmMaxMapCount: 262144
+
+extraInitContainers:
+  - name: sysctl
+    image: botml.azurecr.io/general/shell:2.11
+    imagePullPolicy: "IfNotPresent"
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        sysctl -w vm.max_map_count=262144
+        sysctl -w fs.file-max=65536
+    securityContext:
+      runAsUser: 0
+      privileged: true
+
+keystore:
+  - secretName: keystore-secrets
+
+extraVolumes:
+  - name: logvolume
+    azureFile:
+      secretName: alpha-secrets
+      shareName: opensearch
+      readOnly: false
+
+extraVolumeMounts:
+  - mountPath: "/usr/share/opensearch/config/analysis"
+    name: logvolume
+
+plugins:
+  enabled: true
+  installList:
+    - repository-azure
+    - https://github.com/aiven/prometheus-exporter-plugin-for-opensearch/releases/download/3.0.0.0/prometheus-exporter-3.0.0.0.zip
+
+serviceMonitor:
+  enabled: true
+  path: /_prometheus/metrics
+  scheme: http
+  tlsConfig:
+    insecureSkipVerify: true
+  interval: 10s
+  labels: {}
+
+# data nodes talk to master/client over the headless service only —
+# no externally-routable Service needed here.
+
+imagePullSecrets:
+  - name: acr-auth

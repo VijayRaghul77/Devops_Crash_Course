@@ -1,0 +1,115 @@
+# Default values for private-nginx.
+
+replicaCount: 2
+
+image:
+  repository: nginx
+  tag: "1.27-alpine"
+  pullPolicy: IfNotPresent
+  # Set this when pulling from a private registry.
+  # pullSecret: my-registry-credentials
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Non-privileged port (>1024) so the container can run as non-root.
+containerPort: 8080
+
+service:
+  # ClusterIP only — never expose this workload outside the cluster.
+  type: ClusterIP
+  port: 80
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+# Emptydir mounts required because readOnlyRootFilesystem is true.
+volumes:
+  cache: {}
+  run: {}
+
+nginxConf: |
+  worker_processes  auto;
+  pid /tmp/nginx.pid;
+
+  events {
+    worker_connections  1024;
+  }
+
+  http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path       /tmp/proxy_temp;
+    fastcgi_temp_path     /tmp/fastcgi_temp;
+    uwsgi_temp_path       /tmp/uwsgi_temp;
+    scgi_temp_path        /tmp/scgi_temp;
+
+    server {
+      listen 8080;
+      server_name _;
+
+      location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+      }
+
+      location /healthz {
+        access_log off;
+        return 200 "ok\n";
+      }
+    }
+  }
+
+# NetworkPolicy: deny-all by default, then explicitly allow what's listed below.
+networkPolicy:
+  enabled: true
+  ingress:
+    # Only pods in this same namespace (matched by podSelector below) may
+    # reach nginx. Add extra rules here for other trusted namespaces/pods.
+    allowFrom:
+      - podSelector: {}
+    ports:
+      - port: 8080
+        protocol: TCP
+  egress:
+    # DNS is required for name resolution even in a fully private setup.
+    allowDNS: true
+    # No other egress is permitted by default — this workload should not
+    # need to reach anything outside the cluster.
+    allowTo: []
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+podAnnotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

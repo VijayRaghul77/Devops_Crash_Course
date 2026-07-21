@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: os-ingress-base-alpha
+  namespace: opensearch
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,SubscriptionId,FinonId,range,locale,timezone"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "*"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    nginx.ingress.kubernetes.io/proxy-buffers: "16 16k"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.org/client-max-body-size: "100m"
+
+spec:
+  ingressClassName: nginx
+
+  tls:
+  - hosts:
+      - bmalpha.centralindia.cloudapp.azure.com
+    secretName: bmalpha-101
+
+  rules:
+  - host: bmalpha.centralindia.cloudapp.azure.com
+    http:
+      paths:
+      - path: /os
+        pathType: Prefix
+        backend:
+          service:
+            name: opensearch-cluster-client
+            port:
+              number: 9200
+
+# NOTE: this fronts the client Service with NO auth (security plugin is
+# disabled cluster-wide) and cors-allow-origin "*" — anyone who can reach
+# https://bmalpha.centralindia.cloudapp.azure.com/os can read/write/delete
+# every index. Fine for a locked-down dev exercise; before this pattern
+# reaches anything resembling production, put an auth layer in front
+# (re-enable the security plugin, or add an oauth2-proxy / IP allowlist at
+# the ingress) rather than relying on the client Service being ClusterIP.

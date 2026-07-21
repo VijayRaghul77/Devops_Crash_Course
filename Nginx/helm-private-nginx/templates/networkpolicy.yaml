@@ -1,0 +1,54 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "private-nginx.fullname" . }}
+  labels:
+    {{- include "private-nginx.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "private-nginx.selectorLabels" . | nindent 6 }}
+  # Selecting this pod for both directions makes the policy deny-all by
+  # default; only the rules listed below are permitted.
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- if not .Values.networkPolicy.ingress.allowFrom }} []{{ end }}
+        {{- range .Values.networkPolicy.ingress.allowFrom }}
+        - {{ toYaml . | nindent 10 | trim }}
+        {{- end }}
+      ports:
+        {{- if not .Values.networkPolicy.ingress.ports }} []{{ end }}
+        {{- range .Values.networkPolicy.ingress.ports }}
+        - protocol: {{ .protocol }}
+          port: {{ .port }}
+        {{- end }}
+  egress:
+    {{- if and (not .Values.networkPolicy.egress.allowDNS) (not .Values.networkPolicy.egress.allowTo) }} []
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.allowDNS }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.networkPolicy.egress.allowTo }}
+    - to:
+        - {{ .to | toYaml | nindent 10 | trim }}
+      {{- if .ports }}
+      ports:
+        {{- range .ports }}
+        - protocol: {{ .protocol }}
+          port: {{ .port }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}

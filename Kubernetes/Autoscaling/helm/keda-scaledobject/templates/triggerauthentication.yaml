@@ -1,0 +1,12 @@
+{{- if .Values.keda.triggerAuthentication.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "keda-scaledobject.fullname" . }}-auth
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "keda-scaledobject.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    {{- toYaml .Values.keda.triggerAuthentication.secretTargetRef | nindent 4 }}
+{{- end }}

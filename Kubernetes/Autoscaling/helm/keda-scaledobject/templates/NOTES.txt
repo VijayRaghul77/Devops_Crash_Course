@@ -1,0 +1,11 @@
+KEDA autoscaling deployed for {{ include "keda-scaledobject.fullname" . }} in namespace {{ .Values.namespace }}.
+
+Check the ScaledObject and the HPA KEDA created for you:
+
+  kubectl get scaledobject {{ include "keda-scaledobject.fullname" . }} -n {{ .Values.namespace }}
+  kubectl describe scaledobject {{ include "keda-scaledobject.fullname" . }} -n {{ .Values.namespace }}
+  kubectl get hpa -n {{ .Values.namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Watch replica count change as triggers fire:
+
+  kubectl get deployment {{ include "keda-scaledobject.fullname" . }} -n {{ .Values.namespace }} -w

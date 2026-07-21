@@ -1,0 +1,13 @@
+apiVersion: v2
+name: keda-scaledobject
+description: Sample worker Deployment autoscaled by KEDA using both metric-based (HPA-style) and cron (time-based) triggers
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - keda
+  - autoscaling
+  - hpa
+  - cron
+home: ""
+sources: []

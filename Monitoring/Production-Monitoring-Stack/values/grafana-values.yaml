@@ -1,0 +1,333 @@
+# Grafana - visualization dashboard
+# Chart: grafana/grafana, version 10.5.8
+#
+# Fixes vs. the original draft:
+#   - No plaintext adminPassword. admin.existingSecret points at a Secret
+#     created out-of-band (see ../README.md#secrets-handling).
+#   - replicas: 1 + SQLite -> replicas: 2 + external Postgres. SQLite does
+#     not support concurrent writers, so >1 replica on SQLite silently
+#     corrupts state; it can only ever be "HA" with a real database behind it.
+#   - persistence disabled: with an external DB, Grafana pods are stateless
+#     (dashboards/datasources come from the sidecar + provisioning, not a
+#     per-pod PVC), so there's nothing that needs a volume anymore.
+#   - Fixed the ingress TLS annotation: kubernetes.io/tls-acme is a
+#     kube-lego annotation (kube-lego was deprecated in 2018) and does
+#     nothing on a cert-manager cluster. Now uses cert-manager.io/cluster-issuer.
+#   - automountServiceAccountToken left at the chart default (true): the
+#     dashboard/datasource sidecars need to call the K8s API to list/watch
+#     labeled ConfigMaps and Secrets - disabling the token breaks discovery
+#     silently (no error, just nothing shows up).
+
+global:
+  imageRegistry: botml.azurecr.io
+  imagePullSecrets:
+    - name: acr-auth
+
+rbac:
+  create: true
+  pspEnabled: false
+  namespaced: false
+
+serviceAccount:
+  create: true
+
+replicas: 2
+
+priorityClassName: system-cluster-critical
+
+podDisruptionBudget:
+  minAvailable: 1
+
+deploymentStrategy:
+  type: RollingUpdate
+
+image:
+  registry: botml.azurecr.io
+  repository: grafana
+  tag: 12.3.1
+  pullPolicy: IfNotPresent
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# =============================================================================
+# Ingress - FIX: cert-manager.io/cluster-issuer instead of the no-op
+# kubernetes.io/tls-acme annotation.
+# =============================================================================
+ingress:
+  enabled: true
+  ingressClassName: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  path: /bm-grafana
+  pathType: Prefix
+  hosts:
+    - dev.botminds.ai
+  tls:
+    - secretName: grafana-tls-01
+      hosts:
+        - dev.botminds.ai
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 200Mi
+
+# =============================================================================
+# Persistence - FIX: disabled. State now lives in Postgres, not on a
+# per-pod PVC (which also couldn't be safely shared across 2 replicas
+# under ReadWriteOnce anyway).
+# =============================================================================
+persistence:
+  enabled: false
+
+# =============================================================================
+# Admin credentials - FIX: no plaintext password. Create the Secret first:
+#   kubectl -n monitoring create secret generic grafana-admin-credentials \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password="$(openssl rand -base64 24)"
+# =============================================================================
+admin:
+  existingSecret: grafana-admin-credentials
+  userKey: admin-user
+  passwordKey: admin-password
+
+# =============================================================================
+# External database - FIX: required for >1 replica. SQLite has no
+# concurrent-writer story; Postgres does. Credentials come from a Secret
+# consumed as env vars below, never written into this file.
+# =============================================================================
+envFromSecret: grafana-db-credentials
+
+grafana.ini:
+  paths:
+    data: /var/lib/grafana/
+    logs: /var/log/grafana
+    plugins: /var/lib/grafana/plugins
+    provisioning: /etc/grafana/provisioning
+
+  analytics:
+    check_for_updates: true
+    reporting_enabled: false
+
+  log:
+    mode: console
+    level: info
+
+  server:
+    domain: dev.botminds.ai
+    root_url: https://dev.botminds.ai/bm-grafana/
+    serve_from_sub_path: true
+    enable_gzip: true
+
+  database:
+    type: postgres
+    host: "<POSTGRES_HOST>:5432"
+    name: grafana
+    # user/password are injected via envFromSecret above as
+    # GF_DATABASE_USER / GF_DATABASE_PASSWORD - do not hardcode here.
+    ssl_mode: require
+
+  security:
+    admin_user: admin
+    disable_gravatar: false
+    cookie_secure: true
+    cookie_samesite: lax
+
+  users:
+    allow_sign_up: false
+    allow_org_create: false
+    auto_assign_org: true
+    auto_assign_org_role: Viewer
+
+  auth:
+    disable_login_form: false
+
+  unified_alerting:
+    enabled: true
+
+# =============================================================================
+# Datasources
+# =============================================================================
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://loki-gateway.monitoring.svc.cluster.local
+        isDefault: true
+        editable: true
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - datasourceUid: loki
+              matcherRegex: "traceID=(\\w+)"
+              name: TraceID
+              url: "$${__value.raw}"
+
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        isDefault: false
+        editable: true
+        jsonData:
+          timeInterval: 30s
+          queryTimeout: 60s
+          httpMethod: POST
+
+# =============================================================================
+# Dashboard Providers
+# =============================================================================
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+      - name: 'logs'
+        orgId: 1
+        folder: 'Logs'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/logs
+      - name: 'kubernetes'
+        orgId: 1
+        folder: 'Kubernetes'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/kubernetes
+
+# =============================================================================
+# Dashboards via grafana.com IDs - requires internet egress at install time
+# (downloadDashboardsImage fetches from grafana.com). If your cluster only
+# has egress to botml.azurecr.io, drop this block and rely on the sidecar
+# below instead (mount dashboard JSON from a ConfigMap you control).
+# =============================================================================
+dashboards:
+  logs:
+    loki-logs:
+      gnetId: 13639
+      revision: 2
+      datasource: Loki
+    k8s-logs:
+      gnetId: 15141
+      revision: 1
+      datasource: Loki
+  kubernetes:
+    k8s-cluster:
+      gnetId: 7249
+      revision: 1
+      datasource: Prometheus
+    k8s-pods:
+      gnetId: 6417
+      revision: 1
+      datasource: Prometheus
+
+plugins:
+  - grafana-clock-panel
+  - grafana-piechart-panel
+
+# =============================================================================
+# Sidecar - discovers dashboards/datasources from labeled ConfigMaps
+# cluster-wide. Needs the ServiceAccount token (chart default: mounted) to
+# call the K8s API - do not disable automountServiceAccountToken globally
+# while this is enabled.
+# =============================================================================
+sidecar:
+  image:
+    repository: botml.azurecr.io/grafana-sc-datasources
+    tag: 2.2.1
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    searchNamespace: ALL
+    watchMethod: WATCH
+    resource: both
+    provider:
+      name: sidecarProvider
+      orgid: 1
+      type: file
+      disableDelete: false
+      allowUiUpdates: true
+      foldersFromFilesStructure: true
+  datasources:
+    enabled: true
+    label: grafana_datasource
+    labelValue: "1"
+    searchNamespace: ALL
+    watchMethod: WATCH
+    resource: both
+
+serviceMonitor:
+  enabled: true
+  path: /metrics
+  labels:
+    release: prometheus
+  interval: 30s
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3000"
+
+podLabels:
+  app: grafana
+  component: monitoring
+
+# initChownData is only needed for the local /var/lib/grafana PVC ownership
+# fix-up - not needed now that persistence is disabled.
+initChownData:
+  enabled: false
+
+downloadDashboardsImage:
+  repository: botml.azurecr.io/grafana-download-dashboards
+  tag: 8.9.1

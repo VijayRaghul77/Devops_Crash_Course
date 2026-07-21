@@ -1,0 +1,287 @@
+# kube-prometheus-stack - metrics
+# Chart: prometheus-community/kube-prometheus-stack, version 67.0.0
+#
+# Fixes vs. the original draft:
+#   - prometheusSpec.replicas was 1, while a 2-replica pod anti-affinity
+#     rule sat right above it doing nothing. Now replicas: 2, matching the
+#     anti-affinity it was already paying for.
+#   - externalLabels said "aks-dev"/"development" while Alloy/Loki tagged
+#     everything "aks-production"/"production" - logs and metrics disagreed
+#     about which cluster they came from. Now consistent.
+#   - kubeStateMetrics.nodeSelector was a YAML indentation bug: it sat at
+#     the document ROOT, not nested under kubeStateMetrics, so it had no
+#     effect. Now correctly nested.
+#   - enableRemoteWriteReceiver: true - required so Alloy's node-exporter
+#     metrics (see alloy-values.yaml) can actually reach Prometheus; plain
+#     ServiceMonitor scraping can't pull metrics out of Alloy's exporter
+#     component.
+
+global:
+  rbac:
+    create: true
+  imagePullSecrets:
+    - name: acr-auth
+
+# Using a separately-deployed Grafana (grafana-values.yaml), not the
+# chart's bundled one.
+grafana:
+  enabled: false
+
+prometheus:
+  enabled: true
+
+  service:
+    type: ClusterIP
+    port: 9090
+    targetPort: 9090
+
+  ingress:
+    enabled: false
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - prometheus.dev.botminds.ai
+    tls:
+      - secretName: prometheus-tls
+        hosts:
+          - prometheus.dev.botminds.ai
+
+  serviceMonitor:
+    enabled: true
+
+  prometheusSpec:
+    image:
+      repository: botml.azurecr.io/prometheus
+      tag: v3.0.1
+
+    # FIX: was 1 - now matches the anti-affinity rule below. Requires >=2
+    # nodes in the agentpool: e864large pool or one replica stays Pending.
+    replicas: 2
+
+    priorityClassName: system-cluster-critical
+
+    retention: 7d
+    retentionSize: "40GB"
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: managed-standard-retain
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+    nodeSelector:
+      agentpool: "e864large"
+
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - prometheus
+          topologyKey: kubernetes.io/hostname
+
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+    # FIX: was "aks-dev"/"development" - now matches Alloy/Loki's
+    # external_labels so a log line and a metric spike correlate correctly
+    # in Grafana Explore.
+    externalLabels:
+      cluster: "aks-production"
+      environment: "production"
+
+    enableAdminAPI: false
+
+    scrapeInterval: "30s"
+    scrapeTimeout: "10s"
+    evaluationInterval: "30s"
+
+    # FIX: added - required for Alloy's prometheus.remote_write (node
+    # metrics) to be accepted. Without this the endpoint 404s.
+    enableRemoteWriteReceiver: true
+
+    additionalScrapeConfigs: []
+
+# =============================================================================
+# Alertmanager - deliberately disabled in favor of Grafana Unified
+# Alerting. NOTE: this means defaultRules below define alert conditions,
+# but nothing currently routes a firing alert to a human - configure
+# Grafana contact points/notification policies before relying on this.
+# See ../README.md#alerting-still-a-todo.
+# =============================================================================
+alertmanager:
+  enabled: false
+
+prometheusOperator:
+  enabled: true
+  image:
+    repository: botml.azurecr.io/prometheus-kube-prometheus-operator
+    tag: v0.79.0
+  prometheusConfigReloader:
+    image:
+      repository: botml.azurecr.io/prometheus-prometheus-kube-prometheus
+      tag: v0.79.0
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  nodeSelector:
+    agentpool: "e864large"
+
+  serviceMonitor:
+    enabled: true
+
+# =============================================================================
+# Node Exporter - stays disabled. Node metrics are collected by Alloy's
+# prometheus.exporter.unix instead (see alloy-values.yaml), avoiding a
+# second DaemonSet competing for the same host-metrics role.
+# =============================================================================
+nodeExporter:
+  enabled: false
+
+# =============================================================================
+# Kube State Metrics
+# FIX: nodeSelector was previously a stray ROOT-level key (YAML indentation
+# bug) and never actually applied. Now correctly nested here.
+# =============================================================================
+kubeStateMetrics:
+  enabled: true
+  image:
+    repository: botml.azurecr.io/prometheus-kube-state-metrics
+    tag: v2.14.0
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  nodeSelector:
+    agentpool: "e864large"
+
+  serviceMonitor:
+    enabled: true
+
+prometheus-node-exporter:
+  enabled: false
+
+# =============================================================================
+# Default Rules
+# =============================================================================
+defaultRules:
+  create: true
+  rules:
+    alertmanager: false
+    etcd: true
+    configReloaders: true
+    general: true
+    k8s: true
+    kubeApiserver: true
+    kubeApiserverAvailability: true
+    kubeApiserverSlos: true
+    kubelet: true
+    kubeProxy: true
+    kubePrometheusGeneral: true
+    kubePrometheusNodeRecording: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    kubeScheduler: true
+    kubeStateMetrics: true
+    network: true
+    node: true
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+    prometheus: true
+    prometheusOperator: true
+
+kubeApiServer:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+
+kubelet:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+
+kubeControllerManager:
+  enabled: true
+  service:
+    enabled: true
+    port: 10257
+    targetPort: 10257
+  serviceMonitor:
+    enabled: true
+    https: true
+    insecureSkipVerify: true
+
+coreDns:
+  enabled: true
+  service:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+
+kubeEtcd:
+  enabled: true
+  service:
+    enabled: true
+    port: 2381
+    targetPort: 2381
+  serviceMonitor:
+    enabled: true
+
+kubeScheduler:
+  enabled: true
+  service:
+    enabled: true
+    port: 10259
+    targetPort: 10259
+  serviceMonitor:
+    enabled: true
+    https: true
+    insecureSkipVerify: true
+
+kubeProxy:
+  enabled: true
+  service:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+
+cleanPrometheusOperatorObjectNames: true

@@ -1,0 +1,123 @@
+# =========================================================
+# OpenSearch Dashboards
+# URL: https://dev.botminds.ai/a/osdashboard
+# =========================================================
+
+opensearchHosts: "http://opensearch-cluster-client:9200"
+protocol: http
+
+replicaCount: 1
+
+image:
+  repository: opensearchproject/opensearch-dashboards
+  # CHANGED from 3.0.0: was pinned a full minor series behind the
+  # opensearch-cluster nodes (3.5.0 in master/data/client-values.yaml).
+  # Dashboards should track the cluster's major.minor to avoid API
+  # incompatibilities — bump alongside the cluster tag going forward.
+  tag: "3.5.0"
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------
+# Probes
+# ---------------------------------------------------------
+startupProbe:
+  tcpSocket:
+    port: 5601
+  periodSeconds: 10
+  failureThreshold: 20
+
+livenessProbe:
+  tcpSocket:
+    port: 5601
+  periodSeconds: 20
+
+readinessProbe:
+  tcpSocket:
+    port: 5601
+  periodSeconds: 20
+
+# ---------------------------------------------------------
+# Security Context
+# ---------------------------------------------------------
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------
+# Dashboards Config
+# ---------------------------------------------------------
+config:
+  opensearch_dashboards.yml: |
+    server.name: opensearch-dashboards
+    server.host: "0.0.0.0"
+    server.port: 5601
+
+    server.basePath: "/osdashboard"
+    server.rewriteBasePath: true
+
+    opensearch.hosts: ["http://opensearch-cluster-client:9200"]
+    opensearch.ssl.verificationMode: none
+    opensearch.ssl.enabled: false
+
+    # Disable security - DO NOT set auth.type when security is disabled
+    opensearch_security.enabled: false
+
+    # Optional: Add these for better logging
+    logging.verbose: false
+    opensearch.requestTimeout: 60000
+    opensearch.pingTimeout: 30000
+
+# ---------------------------------------------------------
+# Service
+# ---------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 5601
+
+# ---------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------
+ingress:
+  enabled: true
+  ingressClassName: nginx
+
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+  # NOTE: this chart's ingress.yaml template hardcodes `pathType: Prefix` —
+  # there's no values field for it, so none is set here.
+  hosts:
+    - host: dev.botminds.ai
+      paths:
+        - path: /osdashboard(/|$)(.*)
+          backend:
+            serviceName: opensearch-dashboards
+            servicePort: 5601
+
+  tls:
+    - secretName: dev-botminds-ai-tls
+      hosts:
+        - dev.botminds.ai
+
+# ---------------------------------------------------------
+# Resources
+# ---------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+# NOTE: no imagePullSecrets here because this image is pulled directly from
+# Docker Hub (opensearchproject/opensearch-dashboards), unlike the cluster
+# nodes which go through the botml.azurecr.io mirror. Confirm that's
+# intentional for your network/egress policy — add `imagePullSecrets` (and
+# mirror this image into the ACR) if Docker Hub isn't reachable from the
+# cluster or if you're hitting anonymous pull rate limits.

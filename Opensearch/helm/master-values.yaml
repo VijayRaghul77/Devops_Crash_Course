@@ -1,0 +1,113 @@
+---
+clusterName: "opensearch-cluster"
+nodeGroup: "master"
+protocol: http
+
+# OpenSearch 3.x uses 'cluster_manager' role instead of 'master'
+roles:
+  - cluster_manager
+
+replicas: 3
+
+opensearchJavaOpts: "-Xmx6g -Xms6g"
+
+resources:
+  limits:
+    cpu: 1900m
+    memory: 10Gi
+  requests:
+    cpu: '1'
+    memory: 4Gi
+
+persistence:
+  enabled: true
+  storageClass: "managed-standard-hdd"
+  size: 20Gi
+  accessModes:
+    - ReadWriteOnce
+
+nodeSelector:
+  agentpool: esmaster
+
+# Anti-Affinity to ensure masters are on different nodes
+antiAffinityTopologyKey: "kubernetes.io/hostname"
+antiAffinity: "hard"
+
+image:
+  repository: "botml.azurecr.io/opensearchproject/opensearch"
+  tag: "3.5.0"
+
+config:
+  opensearch.yml: |
+    cluster.name: opensearch-cluster
+    network.host: 0.0.0.0
+    plugins.security.disabled: true
+    plugins.security.ssl.transport.enabled: false
+    plugins.security.ssl.http.enabled: false
+
+extraEnvs:
+  - name: DISABLE_SECURITY_PLUGIN
+    value: "true"
+  - name: cluster.initial_cluster_manager_nodes
+    value: "opensearch-cluster-master-0,opensearch-cluster-master-1,opensearch-cluster-master-2"
+  - name: discovery.seed_hosts
+    value: "opensearch-cluster-master-headless"
+  - name: JAVA_TOOL_OPTIONS
+    value: "-XX:HeapDumpPath=/dev/null"
+  # NOTE: this is a no-op while plugins.security.disabled/DISABLE_SECURITY_PLUGIN
+  # are true — OpenSearch never checks the admin password with the security
+  # plugin off. Sourced from a secret (instead of last time's hardcoded
+  # literal) so it's ready to go if/when the security plugin is re-enabled.
+  - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: alpha-secrets
+        key: opensearch-admin-secret
+
+sysctlVmMaxMapCount: 262144
+
+extraInitContainers:
+  - name: sysctl
+    image: botml.azurecr.io/general/shell:2.11
+    imagePullPolicy: "IfNotPresent"
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        sysctl -w vm.max_map_count=262144
+        sysctl -w fs.file-max=65536
+    securityContext:
+      runAsUser: 0
+      privileged: true
+
+keystore:
+  - secretName: keystore-secrets
+
+extraVolumes:
+  - name: logvolume
+    azureFile:
+      secretName: alpha-secrets
+      shareName: opensearch
+      readOnly: false
+
+extraVolumeMounts:
+  - mountPath: "/usr/share/opensearch/config/analysis"
+    name: logvolume
+
+plugins:
+  enabled: true
+  installList:
+    - repository-azure
+    - https://github.com/aiven/prometheus-exporter-plugin-for-opensearch/releases/download/3.0.0.0/prometheus-exporter-3.0.0.0.zip
+
+serviceMonitor:
+  enabled: true
+  path: /_prometheus/metrics
+  scheme: http
+  tlsConfig:
+    insecureSkipVerify: true
+  interval: 10s
+  labels: {}
+
+imagePullSecrets:
+  - name: acr-auth

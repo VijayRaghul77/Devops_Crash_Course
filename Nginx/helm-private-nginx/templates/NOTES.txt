@@ -1,0 +1,16 @@
+private-nginx has been deployed to namespace {{ .Release.Namespace }}.
+
+This workload is intentionally NOT reachable from outside the cluster:
+  - Service type is {{ .Values.service.type }} (no NodePort/LoadBalancer/Ingress).
+  - A NetworkPolicy restricts ingress to pods matched by
+    .Values.networkPolicy.ingress.allowFrom and egress to DNS only
+    (plus anything you added under .Values.networkPolicy.egress.allowTo).
+
+To reach it from inside the cluster, from a pod in an allowed namespace/selector:
+
+  kubectl run -it --rm debug --image=busybox --restart=Never -- \
+    wget -qO- http://{{ include "private-nginx.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+
+Or port-forward for local debugging only:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "private-nginx.fullname" . }} 8080:{{ .Values.service.port }}

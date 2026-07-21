@@ -1,0 +1,252 @@
+# Grafana Alloy - Log collector (DaemonSet) + node metrics exporter
+# Fixes vs. the original draft:
+#   - discovery.relabel now builds a __path__ that matches the ACTUAL on-disk
+#     kubelet log layout, and the pipeline reads it via loki.source.file
+#     (the draft built __path__ then fed loki.source.kubernetes instead,
+#     which ignores it entirely and made the label dead weight).
+#   - stage.cri unwraps containerd's log-line framing BEFORE stage.json runs.
+#     Without it, stage.json fails on every non-trivial line because
+#     containerd logs look like `2024-01-01T00:00:00Z stdout F {"msg":"..."}`,
+#     not raw JSON.
+#   - prometheus.exporter.unix + prometheus.remote_write close the "no node
+#     metrics anywhere" gap (Prometheus disables nodeExporter assuming Alloy
+#     covers it - it didn't, until now). Requires Prometheus's remote-write
+#     receiver enabled - see prometheus-values.yaml.
+#   - external_labels now match prometheus-values.yaml (cluster/env) so logs
+#     and metrics correlate in Grafana Explore.
+
+alloy:
+  image:
+    repository: botml.azurecr.io/alloy
+    tag: v1.12.2
+    pullPolicy: IfNotPresent
+  configMap:
+    create: true
+    content: |-
+      // ---------------------------------------------------------------
+      // Node metrics (fills the gap left by nodeExporter.enabled=false in
+      // the Prometheus stack, which assumed Alloy already covered this).
+      // Scraped in-process and remote-written to Prometheus, which must
+      // have enableRemoteWriteReceiver: true (see prometheus-values.yaml).
+      // ---------------------------------------------------------------
+      prometheus.exporter.unix "node" { }
+
+      prometheus.scrape "node_metrics" {
+        targets    = prometheus.exporter.unix.node.targets
+        forward_to = [prometheus.remote_write.metrics.receiver]
+      }
+
+      prometheus.remote_write "metrics" {
+        endpoint {
+          url = "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+        }
+        external_labels = {
+          cluster = "aks-production",
+          env     = "production",
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // Kubernetes pod discovery
+      // ---------------------------------------------------------------
+      discovery.kubernetes "pods" {
+        role = "pod"
+        namespaces {
+          names = ["default", "platform-apps", "opensearch-v26", "kafka", "postgres", "monitoring", "grafana", "datadog", "prefect", "opensearch", "ingress-basic"]
+        }
+      }
+
+      // Filter and relabel discovered pods
+      discovery.relabel "kubernetes_pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Keep only running pods
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          action        = "keep"
+          regex         = "Running"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_component"]
+          target_label  = "component"
+        }
+
+        // FIX: this now matches the real kubelet log directory layout
+        // (/var/log/pods/<namespace>_<pod-name>_<pod-uid>/<container>/*.log)
+        // instead of a UID/container-only path that never existed on disk.
+        rule {
+          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_name", "__meta_kubernetes_pod_uid"]
+          separator     = "_"
+          target_label  = "__path__"
+          replacement   = "/var/log/pods/*$1/*/*.log"
+        }
+      }
+
+      // Expand the glob in __path__ into concrete files to tail
+      local.file_match "pod_logs" {
+        path_targets = discovery.relabel.kubernetes_pods.output
+      }
+
+      // Tail the actual log files (consistent with the hostPath mounts below)
+      loki.source.file "pod_logs" {
+        targets    = local.file_match.pod_logs.targets
+        forward_to = [loki.process.process_logs.receiver]
+      }
+
+      // Process and parse logs
+      loki.process "process_logs" {
+        // FIX: unwrap the containerd/CRI log framing first, so stage.json
+        // below sees the app's actual log line instead of the CRI prefix.
+        stage.cri { }
+
+        // Best-effort JSON parse of the app payload. Apps that don't log
+        // JSON simply keep their raw "output" line - this stage does not
+        // error the pipeline on non-JSON input.
+        stage.json {
+          expressions = {
+            output    = "log",
+            level     = "level",
+          }
+        }
+
+        stage.labels {
+          values = {
+            level = "",
+          }
+        }
+
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      // Write logs to Loki
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+
+        external_labels = {
+          cluster = "aks-production",
+          env     = "production",
+        }
+      }
+
+# =============================================================================
+# Controller Configuration
+# =============================================================================
+controller:
+  type: daemonset
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+# =============================================================================
+# Resource Configuration
+# =============================================================================
+resources:
+  limits:
+    cpu: 800m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+# =============================================================================
+# Priority Class
+# Note: verify your cluster allows system-node-critical outside kube-system -
+# some policy-hardened clusters restrict it.
+# =============================================================================
+priorityClassName: system-node-critical
+
+# =============================================================================
+# Security Context
+# runAsUser/Group 0 is required here: the hostPath log directories mounted
+# below are owned by root on the node, and Alloy needs to read them.
+# Everything droppable IS dropped to keep the blast radius as small as
+# root-required workloads allow.
+# =============================================================================
+securityContext:
+  privileged: false
+  runAsUser: 0
+  runAsGroup: 0
+  fsGroup: 0
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
+# =============================================================================
+# Volume Mounts - required by the file-tailing pipeline above
+# =============================================================================
+extraVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+
+extraVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+    readOnly: true
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  name: alloy
+
+rbac:
+  create: true
+
+# =============================================================================
+# Tolerations - run on every node, including control-plane
+# =============================================================================
+tolerations:
+  - effect: NoSchedule
+    operator: Exists
+
+# =============================================================================
+# Service Configuration
+# =============================================================================
+service:
+  enabled: true
+  type: ClusterIP
+
+# =============================================================================
+# Monitoring - scrapes Alloy's own component/self metrics (pipeline health,
+# not the node-exporter metrics - those are remote-written, see above).
+# =============================================================================
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+  interval: 30s

@@ -1,0 +1,226 @@
+# Loki - log aggregation
+# Chart: grafana/loki, version 6.20.0
+#
+# Fixes vs. the original draft:
+#   - deploymentMode: SingleBinary + replicas: 1 + replication_factor: 1 +
+#     local `filesystem` storage was a single point of failure dressed up
+#     as HA by putting 2 nginx gateway replicas in front of it. If that one
+#     process dies, both gateway replicas just serve errors, and filesystem
+#     storage means log data lives and dies with one pod's disk.
+#   - Switched to SimpleScalable mode (write/read/backend, each >1 replica)
+#     backed by Azure Blob Storage instead of a local PVC, so any single
+#     pod or node loss doesn't lose data or availability.
+#   - replication_factor: 3 so a single ingester loss doesn't drop writes.
+#
+# Re-check `helm show values grafana/loki --version 6.20.0` against this
+# file if you bump the chart version - SimpleScalable's schema has moved
+# around across chart releases.
+
+deploymentMode: SimpleScalable
+
+loki:
+  image:
+    repository: botml.azurecr.io/loki
+    tag: 3.2.0
+  auth_enabled: false
+  priorityClassName: system-node-critical
+
+  commonConfig:
+    path_prefix: /var/loki
+    replication_factor: 3
+    ring:
+      kvstore:
+        store: memberlist
+
+  # FIX: object storage instead of local filesystem - required for
+  # multiple write/read replicas to share the same log data.
+  storage:
+    type: azure
+    azure:
+      accountName: "<AZURE_STORAGE_ACCOUNT_NAME>"
+      containerName: "loki-chunks"
+      # Prefer Azure Workload Identity over a static account key - no
+      # long-lived secret to rotate or leak.
+      useManagedIdentity: true
+
+  schemaConfig:
+    configs:
+      - from: 2024-01-01
+        store: tsdb
+        object_store: azure
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  limits_config:
+    retention_period: 168h  # 7 days - revisit against your compliance/debug-window needs
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    max_cache_freshness_per_query: 10m
+    split_queries_by_interval: 15m
+    max_query_parallelism: 32
+    ingestion_rate_mb: 20
+    ingestion_burst_size_mb: 40
+    per_stream_rate_limit: 10MB
+    per_stream_rate_limit_burst: 30MB
+    max_entries_limit_per_query: 10000
+
+  compactor:
+    working_directory: /var/loki/compactor
+    compaction_interval: 10m
+    retention_enabled: true
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 50
+    delete_request_store: azure
+
+  query_scheduler:
+    max_outstanding_requests_per_tenant: 2048
+
+  querier:
+    max_concurrent: 4
+
+# =============================================================================
+# Write path - FIX: was singleBinary.replicas=1; now a real replica set.
+# Holds the WAL, so it still needs persistent storage per-pod.
+# =============================================================================
+write:
+  replicas: 3
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  persistence:
+    storageClass: managed-standard-retain
+    size: 50Gi
+
+# =============================================================================
+# Read path - FIX: was 0 (disabled under SingleBinary mode)
+# =============================================================================
+read:
+  replicas: 2
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# =============================================================================
+# Backend path (index gateway, compactor, ruler) - FIX: was 0
+# =============================================================================
+backend:
+  replicas: 3
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  persistence:
+    storageClass: managed-standard-retain
+    size: 20Gi
+
+# =============================================================================
+# Legacy SingleBinary key - explicitly disabled; deploymentMode above
+# selects SimpleScalable.
+# =============================================================================
+singleBinary:
+  replicas: 0
+
+# =============================================================================
+# Gateway Configuration (NGINX) - now genuinely HA, since it fronts a real
+# multi-replica read/write path instead of one process.
+# =============================================================================
+gateway:
+  enabled: true
+  replicas: 2
+  image:
+    repository: botml.azurecr.io/loki-gateway
+    tag: 1.27-alpine
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/rewrite-target: /$2
+    hosts:
+      - host: dev.botminds.ai
+        paths:
+          - path: /loki(/|$)(.*)
+            pathType: Prefix
+    tls:
+      - secretName: loki-tls
+        hosts:
+          - dev.botminds.ai
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# =============================================================================
+# Monitoring
+# =============================================================================
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus
+    interval: 30s
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+
+test:
+  enabled: false
+
+rbac:
+  create: true
+  pspEnabled: false
+
+serviceAccount:
+  create: true
+  name: loki
+
+networkPolicy:
+  enabled: false
+
+lokiCanary:
+  enabled: false
+
+# =============================================================================
+# Memcached caches - more valuable now that there's a real read path
+# =============================================================================
+chunksCache:
+  enabled: true
+  allocatedMemory: 512
+  image:
+    repository: botml.azurecr.io/loki-cache
+    tag: 1.6.32-alpine
+  exporter:
+    image:
+      repository: botml.azurecr.io/loki-cache-exporter
+      tag: v0.15.0
+
+resultsCache:
+  enabled: true
+  allocatedMemory: 512
+  image:
+    repository: botml.azurecr.io/loki-cache
+    tag: 1.6.32-alpine
+  exporter:
+    image:
+      repository: botml.azurecr.io/loki-cache-exporter
+      tag: v0.15.0

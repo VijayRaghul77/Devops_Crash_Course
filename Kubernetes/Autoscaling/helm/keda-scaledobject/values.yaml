@@ -1,0 +1,90 @@
+# Default values for keda-scaledobject.
+
+nameOverride: ""
+fullnameOverride: ""
+
+namespace: platform-apps
+
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: "1.25-alpine"
+  pullPolicy: IfNotPresent
+
+containerPort: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Env vars injected into the container as plain values (see secretEnv below for
+# values that should come from the Secret this chart creates, e.g. connection strings).
+env: []
+  # - name: LOG_LEVEL
+  #   value: "info"
+
+# Connection string(s) the queue-based trigger needs at runtime. Stored in a
+# Secret and mounted into the pod as an env var so `connectionFromEnv` (used by
+# the azure-queue trigger below) can resolve it. Leave connectionString empty
+# and set create: false if you already manage this secret out-of-band.
+secretEnv:
+  create: true
+  envName: AzureWebJobsStorage
+  connectionString: "DefaultEndpointsProtocol=https;AccountName=<name>;AccountKey=<key>;EndpointSuffix=core.windows.net"
+
+keda:
+  enabled: true
+
+  # --- ScaledObject-level settings -----------------------------------------
+  pollingInterval: 15   # seconds between checks of each trigger's metric
+  cooldownPeriod: 60    # seconds to wait after the last active trigger before scaling back down
+  minReplicaCount: 0    # 0 enables scale-to-zero; only possible when relying purely on external triggers (queue/cron), not cpu/memory
+  maxReplicaCount: 10
+
+  fallback:
+    enabled: true
+    failureThreshold: 3   # consecutive polling failures before fallback kicks in
+    replicas: 1           # replica count to hold while the metric source is unreachable
+
+  # --- HPA-style triggers ---------------------------------------------------
+  # KEDA turns every entry here into a metric on the HPA it manages for you.
+  # `cpu`/`memory` triggers behave exactly like a plain HorizontalPodAutoscaler
+  # (still require metrics-server) and CANNOT scale below 1 replica.
+  # External triggers (azure-queue, prometheus, rabbitmq, ...) don't need
+  # metrics-server and DO support scale-to-zero.
+  metricTriggers:
+    - type: azure-queue
+      metadata:
+        queueName: preqindocumentexporter
+        queueLength: "3"                      # target messages/replica - same tuning knob as an HPA target value
+        connectionFromEnv: AzureWebJobsStorage # must match secretEnv.envName above
+
+    # Example alternative: plain CPU-based HPA behavior via KEDA.
+    # - type: cpu
+    #   metadata:
+    #     type: Utilization
+    #     value: "60"
+
+  # --- Time-based (cron) triggers -------------------------------------------
+  # Each entry forces the replica count up to `desiredReplicas` during the
+  # [start, end] window, on top of whatever the metric triggers above are
+  # already asking for (KEDA takes the MAX across all active triggers).
+  cronTriggers:
+    - timezone: Asia/Kolkata
+      start: "0 8 * * 1-5"    # 08:00 IST, Mon-Fri
+      end: "0 20 * * 1-5"     # 20:00 IST, Mon-Fri
+      desiredReplicas: "5"
+
+  # Optional: reference a TriggerAuthentication instead of connectionFromEnv,
+  # e.g. when pulling the connection string from a K8s Secret via secretTargetRef.
+  triggerAuthentication:
+    enabled: false
+    secretTargetRef:
+      - parameter: connection
+        name: ""      # secret name
+        key: ""       # secret key
